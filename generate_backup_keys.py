@@ -2,29 +2,20 @@
 """
 generate_backup_keys.py
 -----------------------
-Vygeneruje RSA-4096 keypair pro šifrování záloh.
-
-Výstup:
-  - PRIVATE KEY       → pouze do konzole (nikdy na disk!) — zkopíruj do trezoru
-  - public_key.pem    → uložen do backup_keys/<název>/
-
-Šifrování / dešifrování pak řeší univerzální nástroje:
-  python3 encrypt_backup.py <vstup> <výstup.enc.json> <public_key.pem>
-  python3 decrypt_backup.py <záloha.enc.json> <výstup> <private_key.pem>
+Vygeneruje RSA-4096 keypair a vypíše vše do konzole.
+Na disk se NIC neukládá.
 
 Použití:
-  python3 generate_backup_keys.py <název>
-  python3 generate_backup_keys.py hermes
+  python3 generate_backup_keys.py
 """
 
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-import os, base64, sys
-from pathlib import Path
+import os, base64
 
-
-def generate_keypair():
+def main():
+    # Generuj keypair
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=4096)
     public_key  = private_key.public_key()
 
@@ -39,58 +30,55 @@ def generate_keypair():
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     ).decode()
 
-    return private_key, public_key, priv_pem, pub_pem
-
-
-def verify_roundtrip(private_key, public_key):
-    test    = b"backup-roundtrip-test"
+    # Roundtrip test
+    test    = b"roundtrip-test"
     aes_key = os.urandom(32)
     nonce   = os.urandom(12)
     ct      = AESGCM(aes_key).encrypt(nonce, test, None)
-    enc_key = public_key.encrypt(
-        aes_key,
-        padding.OAEP(mgf=padding.MGF1(hashes.SHA256()), algorithm=hashes.SHA256(), label=None),
-    )
-    aes_key2 = private_key.decrypt(
-        enc_key,
-        padding.OAEP(mgf=padding.MGF1(hashes.SHA256()), algorithm=hashes.SHA256(), label=None),
-    )
-    plain = AESGCM(aes_key2).decrypt(nonce, ct, None)
-    assert plain == test, "Roundtrip FAILED!"
+    enc_key = public_key.encrypt(aes_key, padding.OAEP(
+        mgf=padding.MGF1(hashes.SHA256()), algorithm=hashes.SHA256(), label=None))
+    aes_key2 = private_key.decrypt(enc_key, padding.OAEP(
+        mgf=padding.MGF1(hashes.SHA256()), algorithm=hashes.SHA256(), label=None))
+    assert AESGCM(aes_key2).decrypt(nonce, ct, None) == test, "Roundtrip FAILED!"
 
+    encrypt_py = f'''\
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+import os, base64, json
 
-def main():
-    if len(sys.argv) < 2:
-        print("Použití: python3 generate_backup_keys.py <název>")
-        print("Příklad: python3 generate_backup_keys.py hermes")
-        sys.exit(1)
+PUBLIC_KEY_PEM = """{pub_pem.strip()}"""
 
-    name       = sys.argv[1]
-    output_dir = Path(__file__).parent / "backup_keys" / name
-    output_dir.mkdir(parents=True, exist_ok=True)
+def encrypt_backup(data: bytes) -> bytes:
+    pub     = serialization.load_pem_public_key(PUBLIC_KEY_PEM.encode())
+    aes_key = os.urandom(32)
+    nonce   = os.urandom(12)
+    ct      = AESGCM(aes_key).encrypt(nonce, data, None)
+    enc_key = pub.encrypt(aes_key, padding.OAEP(
+        mgf=padding.MGF1(hashes.SHA256()), algorithm=hashes.SHA256(), label=None))
+    return json.dumps({{
+        "enc_key": base64.b64encode(enc_key).decode(),
+        "nonce":   base64.b64encode(nonce).decode(),
+        "ct":      base64.b64encode(ct).decode(),
+    }}).encode()
+'''
 
-    print(f"🔑  Generuji RSA-4096 keypair pro '{name}'…")
-    private_key, public_key, priv_pem, pub_pem = generate_keypair()
-
-    print("🔄  Ověřuji roundtrip…")
-    verify_roundtrip(private_key, public_key)
-    print("✅  Roundtrip OK\n")
-
-    (output_dir / "public_key.pem").write_text(pub_pem)
-
-    SEP = "═" * 64
-    print(SEP)
-    print(f"  🔑  PRIVATE KEY — ZKOPÍRUJ DO TREZORU, NIKAM JINAM")
-    print(SEP)
+    S = "═" * 68
+    print(f"\n{S}")
+    print("  🔑  PRIVATE KEY — ulož do trezoru")
+    print(S)
     print(priv_pem)
-    print(SEP)
-    print(f"  📢  public_key.pem → {output_dir}/public_key.pem")
-    print(SEP)
-    print()
-    print("  Šifrování:   python3 encrypt_backup.py <vstup> <výstup.enc.json> backup_keys/{name}/public_key.pem")
-    print("  Dešifrování: python3 decrypt_backup.py <záloha.enc.json> <výstup> <private_key.pem>")
-    print()
-
+    print(S)
+    print("  📢  PUBLIC KEY — dej agentovi (nebo jen dej encrypt blok níže)")
+    print(S)
+    print(pub_pem)
+    print(S)
+    print("  📦  ENCRYPT FUNKCE — vlož do backup skriptu agenta")
+    print(S)
+    print(encrypt_py)
+    print(S)
+    print("  ✅  Roundtrip test: PASSED (RSA-4096 + AES-256-GCM)")
+    print(S + "\n")
 
 if __name__ == "__main__":
     main()
