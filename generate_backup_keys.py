@@ -5,9 +5,12 @@ generate_backup_keys.py
 Vygeneruje RSA-4096 keypair pro šifrování záloh.
 
 Výstup:
-  - PRIVATE KEY    → pouze do konzole (nikdy na disk!) — zkopíruj do trezoru
-  - public_key.pem → uložen do backup_keys/<název>/
-  - encrypt_snippet.py → uložen do backup_keys/<název>/  (vlož do backup skriptu agenta)
+  - PRIVATE KEY       → pouze do konzole (nikdy na disk!) — zkopíruj do trezoru
+  - public_key.pem    → uložen do backup_keys/<název>/
+
+Šifrování / dešifrování pak řeší univerzální nástroje:
+  python3 encrypt_backup.py <vstup> <výstup.enc.json> <public_key.pem>
+  python3 decrypt_backup.py <záloha.enc.json> <výstup> <private_key.pem>
 
 Použití:
   python3 generate_backup_keys.py <název>
@@ -17,36 +20,8 @@ Použití:
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-import os, base64, json, sys
+import os, base64, sys
 from pathlib import Path
-
-ENCRYPT_SNIPPET_TEMPLATE = '''\
-# encrypt_snippet.py — vlož do svého backup skriptu
-# Závislost: pip install cryptography
-from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-import os, base64, json
-
-PUBLIC_KEY_PEM = """{pub_pem}"""
-
-
-def encrypt_backup(data: bytes) -> bytes:
-    """Zašifruje zálohu public klíčem. Dešifrovat lze jen private klíčem."""
-    pub = serialization.load_pem_public_key(PUBLIC_KEY_PEM.encode())
-    aes_key = os.urandom(32)
-    nonce   = os.urandom(12)
-    ct      = AESGCM(aes_key).encrypt(nonce, data, None)
-    enc_key = pub.encrypt(
-        aes_key,
-        padding.OAEP(mgf=padding.MGF1(hashes.SHA256()), algorithm=hashes.SHA256(), label=None),
-    )
-    return json.dumps({{
-        "enc_key": base64.b64encode(enc_key).decode(),
-        "nonce":   base64.b64encode(nonce).decode(),
-        "ct":      base64.b64encode(ct).decode(),
-    }}).encode()
-'''
 
 
 def generate_keypair():
@@ -101,11 +76,7 @@ def main():
     verify_roundtrip(private_key, public_key)
     print("✅  Roundtrip OK\n")
 
-    # public key + encrypt snippet → na disk
     (output_dir / "public_key.pem").write_text(pub_pem)
-    (output_dir / "encrypt_snippet.py").write_text(
-        ENCRYPT_SNIPPET_TEMPLATE.format(pub_pem=pub_pem.strip())
-    )
 
     SEP = "═" * 64
     print(SEP)
@@ -113,12 +84,11 @@ def main():
     print(SEP)
     print(priv_pem)
     print(SEP)
-    print(f"  📢  public_key.pem    → {output_dir}/public_key.pem")
-    print(f"  📦  encrypt_snippet.py → {output_dir}/encrypt_snippet.py")
+    print(f"  📢  public_key.pem → {output_dir}/public_key.pem")
     print(SEP)
     print()
-    print("  Dešifrování záloh:")
-    print("  python3 decrypt_backup.py <záloha.enc.json> <výstup> <private_key.pem>")
+    print("  Šifrování:   python3 encrypt_backup.py <vstup> <výstup.enc.json> backup_keys/{name}/public_key.pem")
+    print("  Dešifrování: python3 decrypt_backup.py <záloha.enc.json> <výstup> <private_key.pem>")
     print()
 
 
